@@ -305,12 +305,37 @@
         <label for="newDate">Tournament date</label>
         <input type="date" id="newDate" required>
         <label for="newStatus">Registration status</label>
-        <select id="newStatus"><option>Open</option><option>Upcoming</option><option>Full</option></select>
+        <select id="newStatus"><option>Open</option><option>Upcoming</option></select>
         <p id="adminMessage" class="form-message" aria-live="polite"></p>
         <button type="submit" class="primary-button full-button">Create tournament →</button>
       </form>
     </div>
   </div>
+  
+  <div class="modal-backdrop hidden" id="adminLoginModal"
+     role="dialog" aria-modal="true" aria-labelledby="adminLoginTitle">
+  <div class="modal">
+    <button class="modal-close" data-close="adminLoginModal"
+            aria-label="Close">×</button>
+
+    <p class="eyebrow">SECURE ACCESS</p>
+    <h2 id="adminLoginTitle">Admin verification</h2>
+    <p class="muted">Enter your admin password to manage tournaments.</p>
+
+    <form id="adminLoginForm">
+      <label for="adminPasswordInput">Admin password</label>
+      <input id="adminPasswordInput" type="password"
+             autocomplete="current-password" required>
+
+      <p id="adminLoginMessage" class="form-message"
+         aria-live="polite"></p>
+
+      <button type="submit" class="primary-button full-button">
+        Verify access →
+      </button>
+    </form>
+  </div>
+</div>
 
 <!-- Custom animated esports cursor -->
 <div class="cursor-orbit cursor-ring-one" aria-hidden="true"></div>

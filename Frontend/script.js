@@ -3,74 +3,10 @@
 // GTMS FRONTEND DEMO
 // Sample data is stored in this JavaScript file.
 
-const tournaments = [
-  {
-    id: 1,
-    name: "Valorant Champions Cup",
-    game: "Valorant",
-    prize: 25000,
-    slots: 64,
-    registered: 42,
-    date: "2026-11-15",
-    status: "Open",
-    description: "A competitive Valorant tournament for teams ready to prove their skills."
-  },
-  {
-    id: 2,
-    name: "BGMI Campus Showdown",
-    game: "BGMI",
-    prize: 15000,
-    slots: 100,
-    registered: 72,
-    date: "2026-11-20",
-    status: "Open",
-    description: "Drop into the battleground and compete for the campus championship."
-  },
-  {
-    id: 3,
-    name: "Free Fire Elite League",
-    game: "Free Fire",
-    prize: 10000,
-    slots: 48,
-    registered: 48,
-    date: "2026-11-25",
-    status: "Full",
-    description: "A fast-paced competition for players looking to reach the top."
-  },
-  {
-    id: 4,
-    name: "Counter-Strike Tactical Cup",
-    game: "Counter-Strike 2",
-    prize: 20000,
-    slots: 32,
-    registered: 18,
-    date: "2026-12-01",
-    status: "Open",
-    description: "Precision, teamwork, and strategy decide who wins this tactical cup."
-  },
-  {
-    id: 5,
-    name: "Valorant Rising Stars",
-    game: "Valorant",
-    prize: 8000,
-    slots: 32,
-    registered: 10,
-    date: "2026-12-08",
-    status: "Upcoming",
-    description: "An opportunity for emerging teams to compete and make a name."
-  },
-  {
-    id: 6,
-    name: "BGMI Winter Arena",
-    game: "BGMI",
-    prize: 12000,
-    slots: 64,
-    registered: 21,
-    date: "2026-12-15",
-    status: "Open",
-    description: "Join the winter arena and compete for rewards and bragging rights."
-  }
-];
+const API_BASE = "http://localhost:3000/api";
+
+// Tournaments now come from MySQL via the backend.
+let tournaments = [];
 
 const matches = [
   {
@@ -107,8 +43,18 @@ const leaderboard = [
 // Browser-session demo state.
 let registrations = [];
 let adminMode = false;
-let nextTournamentId = 7;
+let adminToken = "";
 let toastTimer;
+
+try {
+  adminToken = sessionStorage.getItem("gtmsAdminToken") || "";
+} catch {}
+
+function saveRegistrations() {
+  try {
+    localStorage.setItem("gtmsRegistrations", JSON.stringify(registrations));
+  } catch {}
+}
 
 // Format Indian Rupees.
 function formatMoney(amount) {
@@ -206,6 +152,102 @@ function escapeHTML(value) {
     '"': "&quot;",
     "'": "&#39;"
   })[character]);
+}
+// Call the backend and turn error responses into readable messages.
+async function apiRequest(path, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {})
+  };
+
+  if (adminToken) {
+    headers.Authorization = `Bearer ${adminToken}`;
+  }
+
+  const response = await fetch(API_BASE + path, { ...options, headers });
+
+  let data = {};
+  try { data = await response.json(); } catch {}
+
+  if (!response.ok) {
+    const error = new Error(
+  [data.error, data.code, data.detail].filter(Boolean).join(" — ") ||
+  `Request failed (${response.status})`
+);
+    error.status = response.status;
+    throw error;
+  }
+
+  return data;
+}
+
+// Convert database status to the labels the UI already uses.
+function toFrontendStatus(row) {
+  const registered = Number(row.registered) || 0;
+  const slots = Number(row.slots) || 0;
+
+  if (row.db_status === "registration_open") {
+    return registered >= slots ? "Full" : "Open";
+  }
+
+  const labels = {
+    upcoming: "Upcoming",
+    ongoing: "Ongoing",
+    completed: "Completed",
+    cancelled: "Cancelled"
+  };
+
+  return labels[row.db_status] || "Upcoming";
+}
+
+// Load tournaments from MySQL and reshape them for the existing cards.
+async function loadTournaments() {
+  try {
+    const rows = await apiRequest("/tournaments");
+
+    tournaments = rows.map(row => ({
+      id: Number(row.id),
+      name: row.name,
+      game: row.game,
+      prize: Number(row.prize) || 0,       // DECIMAL arrives as a string
+      slots: Number(row.slots) || 0,
+      registered: Number(row.registered) || 0,
+      date: String(row.date).slice(0, 10),
+      status: toFrontendStatus(row),
+      competitorType: row.competitor_type,
+      description: `Join ${row.name}, compete in ${row.game}, and challenge other players.`
+    }));
+  } catch (error) {
+    console.error("Load tournaments failed:", error);
+    showToast("Could not reach the GTMS server. Is it running?");
+  }
+
+  renderAll();
+  updateCountdowns();
+}
+async function loadRegistrations() {
+  try {
+    registrations = await apiRequest("/registrations");
+  } catch (error) {
+    console.error("Load registrations failed:", error);
+  }
+
+  renderRegistrations();
+}
+
+function setAdminMode(on) {
+  adminMode = on;
+  const indicator = document.getElementById("adminIndicator");
+  indicator.textContent = on ? "ON" : "OFF";
+  indicator.classList.toggle("enabled", on);
+}
+
+function openAdminForm() {
+  document.getElementById("newDate").value = "2026-12-20";
+  const message = document.getElementById("adminMessage");
+  message.textContent = "";
+  message.classList.remove("error");
+  openModal("adminModal");
 }
 
 function gameClass(game) {
@@ -425,9 +467,7 @@ function openTournament(id) {
 
   const available = Math.max(0, t.slots - t.registered);
 
-  const isRegistered = registrations.some(
-    r => r.tournamentId === t.id
-  );
+  const isRegistered = false; // unlimited entries allowed
 
   const canRegister =
     t.status === "Open" &&
@@ -460,7 +500,9 @@ function openTournament(id) {
       <strong>${available} / ${t.slots}</strong>
     </div>
   `;
-
+  const teamInput = document.getElementById("teamName");
+  teamInput.disabled = false;
+  teamInput.required = false;
   const message = document.getElementById("registrationMessage");
 
   message.textContent = "";
@@ -480,66 +522,42 @@ function openTournament(id) {
 }
 
 // Register a player in the frontend demo.
-document.getElementById("registrationForm").addEventListener(
-  "submit",
-  event => {
-    event.preventDefault();
+document.getElementById("registrationForm").addEventListener("submit", async event => {
+  event.preventDefault();
 
-    const id = Number(
-      document.getElementById("registrationTournamentId").value
-    );
+  const id = Number(document.getElementById("registrationTournamentId").value);
+  const tournament = tournaments.find(t => t.id === id);
+  const playerName = document.getElementById("playerName").value.trim();
+  const teamName = document.getElementById("teamName").value.trim();
+  const message = document.getElementById("registrationMessage");
+  const submit = document.getElementById("registerSubmit");
 
-    const tournament = tournaments.find(t => t.id === id);
+  if (!tournament || !playerName) return;
 
-    const playerName = document.getElementById("playerName")
-      .value.trim();
+  message.textContent = "";
+  message.classList.remove("error");
+  submit.disabled = true;
+  submit.textContent = "Registering…";
 
-    const teamName = document.getElementById("teamName")
-      .value.trim();
-
-    const message = document.getElementById("registrationMessage");
-
-    if (!tournament || !playerName) return;
-
-    if (registrations.some(r => r.tournamentId === id)) {
-      message.textContent =
-        "You have already registered for this tournament.";
-
-      message.classList.add("error");
-      return;
-    }
-
-    if (
-      tournament.status !== "Open" ||
-      tournament.registered >= tournament.slots
-    ) {
-      message.textContent =
-        "Registration is currently unavailable.";
-
-      message.classList.add("error");
-      return;
-    }
-
-    registrations.push({
-      tournamentId: id,
-      playerName,
-      teamName: teamName || "Solo player",
-      registeredAt: new Date().toISOString()
+  try {
+    await apiRequest(`/tournaments/${id}/register`, {
+      method: "POST",
+      body: JSON.stringify({ playerName, teamName })
     });
 
-    tournament.registered += 1;
-
-    renderAll();
     closeModal("tournamentModal");
-
     document.getElementById("registrationForm").reset();
-
     showToast(`Successfully registered for ${tournament.name}!`);
 
-    // Future backend integration:
-    // POST /api/tournaments/:id/register
+    await Promise.all([loadTournaments(), loadRegistrations()]);
+  } catch (error) {
+    message.textContent = error.message;
+    message.classList.add("error");
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "Confirm registration →";
   }
-);
+});
 // Match schedule with countdowns.
 function renderMatches() {
   document.getElementById("matchList").innerHTML = matches.map(match => {
@@ -653,33 +671,18 @@ function renderRegistrations() {
         Browse the tournaments above to get started.
       </div>
     `;
-
     return;
   }
 
-  container.innerHTML = registrations.map(registration => {
-    const tournament = tournaments.find(
-      t => t.id === registration.tournamentId
-    );
-
-    if (!tournament) return "";
-
-    return `
-      <div class="registration-row">
-        <div>
-          <strong>${escapeHTML(tournament.name)}</strong>
-
-          <small>
-            ${escapeHTML(registration.playerName)}
-            ·
-            ${escapeHTML(registration.teamName)}
-          </small>
-        </div>
-
-        <span class="registration-tag">Registered ✓</span>
+  container.innerHTML = registrations.map(r => `
+    <div class="registration-row">
+      <div>
+        <strong>${escapeHTML(r.tournamentName)}</strong>
+        <small>${escapeHTML(r.playerName)} · ${escapeHTML(r.teamName)}</small>
       </div>
-    `;
-  }).join("");
+      <span class="registration-tag">Registered ✓</span>
+    </div>
+  `).join("");
 }
 
 // Refresh all existing sections.
@@ -737,83 +740,107 @@ document.getElementById("featuredButton").addEventListener("click", () => {
 });
 
 // Admin mode: frontend demonstration only, not real authentication.
+// Admin toggle: ask for the password unless we already hold a valid token.
 document.getElementById("adminToggle").addEventListener("click", () => {
-  adminMode = !adminMode;
-
-  const indicator = document.getElementById("adminIndicator");
-
-  indicator.textContent = adminMode ? "ON" : "OFF";
-  indicator.classList.toggle("enabled", adminMode);
-
   if (adminMode) {
-    document.getElementById("newDate").value = "2026-12-20";
-
-    document.getElementById("adminMessage").textContent = "";
-
-    document.getElementById("adminMessage")
-      .classList.remove("error");
-
-    openModal("adminModal");
-  } else {
+    setAdminMode(false);
+    adminToken = "";
+    try { sessionStorage.removeItem("gtmsAdminToken"); } catch {}
     closeModal("adminModal");
-    showToast("Admin demo mode disabled.");
+    showToast("Admin mode disabled.");
+    return;
+  }
+
+  if (adminToken) {
+    setAdminMode(true);
+    openAdminForm();
+  } else {
+    const message = document.getElementById("adminLoginMessage");
+    message.textContent = "";
+    message.classList.remove("error");
+    openModal("adminLoginModal");
   }
 });
 
-// Create a tournament in local JavaScript memory.
-document.getElementById("adminForm").addEventListener(
-  "submit",
-  event => {
-    event.preventDefault();
+// Admin login → POST /api/admin/login
+document.getElementById("adminLoginForm").addEventListener("submit", async event => {
+  event.preventDefault();
 
-    if (!adminMode) return;
+  const input = document.getElementById("adminPasswordInput");
+  const message = document.getElementById("adminLoginMessage");
 
-    const name = document.getElementById("newTournamentName")
-      .value.trim();
+  message.textContent = "";
+  message.classList.remove("error");
 
-    const game = document.getElementById("newGame").value;
-    const prize = Number(document.getElementById("newPrize").value);
-    const slots = Number(document.getElementById("newSlots").value);
-    const date = document.getElementById("newDate").value;
-    const status = document.getElementById("newStatus").value;
+  try {
+    const data = await apiRequest("/admin/login", {
+      method: "POST",
+      body: JSON.stringify({ password: input.value })
+    });
 
-    const message = document.getElementById("adminMessage");
+    adminToken = data.token;
+    try { sessionStorage.setItem("gtmsAdminToken", adminToken); } catch {}
 
-    if (
-      !name ||
-      !date ||
-      !Number.isFinite(prize) ||
-      prize < 0 ||
-      !Number.isInteger(slots) ||
-      slots < 2
-    ) {
-      message.textContent = "Please enter valid tournament details.";
-      message.classList.add("error");
+    input.value = "";
+    closeModal("adminLoginModal");
+    setAdminMode(true);
+    openAdminForm();
+    showToast("Admin access verified.");
+  } catch (error) {
+    message.textContent = error.message;
+    message.classList.add("error");
+  }
+});
+
+// Create tournament → POST /api/tournaments (Bearer token)
+document.getElementById("adminForm").addEventListener("submit", async event => {
+  event.preventDefault();
+
+  if (!adminMode || !adminToken) return;
+
+  const name = document.getElementById("newTournamentName").value.trim();
+  const game = document.getElementById("newGame").value;
+  const prize = Number(document.getElementById("newPrize").value);
+  const slots = Number(document.getElementById("newSlots").value);
+  const date = document.getElementById("newDate").value;
+  const status = document.getElementById("newStatus").value;
+  const message = document.getElementById("adminMessage");
+
+  if (!name || !date || !Number.isFinite(prize) || prize < 0 ||
+      !Number.isInteger(slots) || slots < 2) {
+    message.textContent = "Please enter valid tournament details.";
+    message.classList.add("error");
+    return;
+  }
+
+  try {
+    await apiRequest("/tournaments", {
+      method: "POST",
+      body: JSON.stringify({ name, game, prize, slots, date, status })
+    });
+
+    closeModal("adminModal");
+    document.getElementById("adminForm").reset();
+    showToast("Tournament saved to the database.");
+    await loadTournaments();
+  } catch (error) {
+    if (error.status === 401) {
+      // Token expired or server restarted.
+      adminToken = "";
+      try { sessionStorage.removeItem("gtmsAdminToken"); } catch {}
+      setAdminMode(false);
+      closeModal("adminModal");
+      openModal("adminLoginModal");
+      document.getElementById("adminLoginMessage").textContent =
+        "Session expired. Please sign in again.";
       return;
     }
 
-    tournaments.push({
-      id: nextTournamentId++,
-      name,
-      game,
-      prize,
-      slots,
-      registered: 0,
-      date,
-      status,
-      description:
-        `Join ${name}, compete in ${game}, and challenge other players.`
-    });
-
-    renderAll();
-
-    closeModal("adminModal");
-
-    document.getElementById("adminForm").reset();
-
-    showToast("Tournament added to the demo dashboard.");
+    message.textContent = error.message;
+    message.classList.add("error");
   }
-);
+});
+
 
 // Modal close buttons.
 document.querySelectorAll("[data-close]").forEach(button => {
@@ -878,14 +905,15 @@ document.getElementById("currentDate").textContent =
 
 document.getElementById("footerYear").textContent =
   new Date().getFullYear();
+document.getElementById("copyrightYear").textContent =
+  new Date().getFullYear();
   // =========================================
 // START THE GTMS APPLICATION
 // =========================================
 
 renderAll();
-
-// Immediately display countdowns.
-updateCountdowns();
+loadTournaments();
+loadRegistrations();    // then fill it from MySQL
 
 // Update countdowns every second without rebuilding cards.
 setInterval(updateCountdowns, 1000);
