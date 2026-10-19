@@ -52,12 +52,26 @@
       <div class="sidebar-bottom">
         <div class="online-status"><span class="status-dot"></span> Demo environment</div>
         <div class="profile">
-          <div class="avatar">P</div>
+          <          <div class="avatar" id="profileAvatar">G</div>
           <div class="profile-info">
-            <strong>Player One</strong>
-            <small>Esports member</small>
+            <strong id="profileName">Guest</strong>
+            <small id="profileSubtitle">Not signed in</small>
           </div>
-          <span class="profile-menu">•••</span>
+          <button class="profile-menu" id="profileMenuButton" type="button"
+                  aria-haspopup="menu" aria-expanded="false" aria-label="Account menu">•••</button>
+        </div>
+
+        <!-- Account popup -->
+        <div class="profile-dropdown hidden" id="profileDropdown" role="menu">
+          <div class="dropdown-caption" id="dropdownCaption">Not signed in</div>
+          <div id="dropdownUserItems">
+            <button type="button" role="menuitem" id="menuProfile"><span>♟</span> Profile</button>
+            <button type="button" role="menuitem" id="menuLogout" class="danger"><span>⏻</span> Logout</button>
+          </div>
+          <div id="dropdownGuestItems">
+            <button type="button" role="menuitem" id="menuLogin"><span>→</span> Log in</button>
+            <button type="button" role="menuitem" id="menuSignup"><span>+</span> Create account</button>
+          </div>
         </div>
       </div>
     </aside>
@@ -74,7 +88,7 @@
       <section class="welcome">
         <div>
           <p class="eyebrow">YOUR ESPORTS COMMAND CENTER</p>
-          <h1>Game on, <span>Player.</span></h1>
+          <h1>Game on, <span id="welcomeName">Player.</span></h1>
           <p class="muted">Find your next competition. Build your squad. Own the leaderboard.</p>
         </div>
         <div class="welcome-date">
@@ -144,6 +158,12 @@
             <option value="BGMI">BGMI</option>
             <option value="Free Fire">Free Fire</option>
             <option value="Counter-Strike 2">Counter-Strike 2</option>
+            <option value="Chess">Chess</option>
+            <option value="EA SPORTS FC">EA SPORTS FC</option>
+            <option value="Call of Duty: Mobile">Call of Duty: Mobile</option>
+            <option value="PUBG: Battlegrounds">PUBG: Battlegrounds</option>
+            <option value="Fortnite">Fortnite</option>
+            <option value="Rocket League">Rocket League</option>
           </select>
           <select id="statusFilter" aria-label="Filter by status">
             <option value="all">All statuses</option>
@@ -275,6 +295,12 @@
         <input id="playerName" name="playerName" placeholder="Enter your name" maxlength="50" required>
         <label for="teamName">Team name (optional)</label>
         <input id="teamName" name="teamName" placeholder="Enter your team name" maxlength="50">
+        <label for="entryType">Entry type</label>
+        <select id="entryType" name="entryType" required>
+          <option value="solo">Solo</option>
+          <option value="duo">Duo</option>
+          <option value="squad">Squad</option>
+        </select>
         <p id="registrationMessage" class="form-message" aria-live="polite"></p>
         <button type="submit" class="primary-button full-button" id="registerSubmit">Confirm registration →</button>
       </form>
@@ -293,11 +319,24 @@
         <input id="newTournamentName" required maxlength="80" placeholder="e.g. Campus Championship">
         <label for="newGame">Game</label>
         <select id="newGame" required>
-          <option value="Valorant">Valorant</option>
           <option value="BGMI">BGMI</option>
+          <option value="Chess">Chess</option>
+          <option value="EA SPORTS FC">EA SPORTS FC</option>
+          <option value="Valorant">Valorant</option>
           <option value="Free Fire">Free Fire</option>
           <option value="Counter-Strike 2">Counter-Strike 2</option>
+          <option value="Call of Duty: Mobile">Call of Duty: Mobile</option>
+          <option value="PUBG: Battlegrounds">PUBG: Battlegrounds</option>
+          <option value="Fortnite">Fortnite</option>
+          <option value="Rocket League">Rocket League</option>
         </select>
+        <label for="newCompetitorType">Tournament type</label>
+        <select id="newCompetitorType" required>
+          <option value="solo">Solo</option>
+          <option value="duo">Duo</option>
+          <option value="squad">Squad</option>
+        </select>
+        
         <div class="form-row">
           <div><label for="newPrize">Prize pool (₹)</label><input type="number" id="newPrize" min="0" required value="5000"></div>
           <div><label for="newSlots">Total slots</label><input type="number" id="newSlots" min="2" max="5000" required value="32"></div>
@@ -333,6 +372,61 @@
       <button type="submit" class="primary-button full-button">
         Verify access →
       </button>
+    </form>
+  </div>
+</div>
+
+<!-- Player profile modal -->
+<div class="modal-backdrop hidden" id="profileModal" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
+  <div class="modal modal-wide">
+    <button class="modal-close" data-close="profileModal" aria-label="Close">×</button>
+    <p class="eyebrow">PLAYER PROFILE</p>
+    <div class="profile-header">
+      <div class="avatar profile-avatar-large" id="profileModalAvatar">G</div>
+      <div>
+        <h2 id="profileTitle">Player</h2>
+        <p class="muted profile-meta" id="profileMeta"></p>
+      </div>
+    </div>
+    <div class="modal-info-grid profile-stats" id="profileStats"></div>
+    <div class="modal-info-grid profile-details" id="profileDetails"></div>
+    <div class="profile-section-title"><span>REGISTRATIONS</span><span id="profileRegCount">0</span></div>
+    <div class="registrations-list profile-registrations" id="profileRegistrations"></div>
+    <button type="button" class="outline-button full-button" id="profileLogout">Log out ⏻</button>
+  </div>
+</div>
+
+<!-- Player login / create account modal -->
+<div class="modal-backdrop hidden" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+  <div class="modal">
+    <button class="modal-close" data-close="authModal" aria-label="Close">×</button>
+    <p class="eyebrow">PLAYER ACCESS</p>
+    <h2 id="authTitle">Welcome back</h2>
+    <p class="muted" id="authSubtitle">Log in to register and track your tournaments.</p>
+
+    <div class="auth-tabs" role="tablist">
+      <button type="button" role="tab" class="auth-tab active" data-auth-tab="login">Log in</button>
+      <button type="button" role="tab" class="auth-tab" data-auth-tab="signup">Create account</button>
+    </div>
+
+    <form id="loginForm">
+      <label for="loginUsername">Username or email</label>
+      <input id="loginUsername" autocomplete="username" maxlength="100" required>
+      <label for="loginPassword">Password</label>
+      <input id="loginPassword" type="password" autocomplete="current-password" required>
+      <p id="loginMessage" class="form-message" aria-live="polite"></p>
+      <button type="submit" class="primary-button full-button" id="loginSubmit">Log in →</button>
+    </form>
+
+    <form id="signupForm" class="hidden">
+      <label for="signupUsername">Username</label>
+      <input id="signupUsername" autocomplete="username" minlength="3" maxlength="30" placeholder="e.g. Player Two" required>
+      <label for="signupEmail">Email</label>
+      <input id="signupEmail" type="email" autocomplete="email" maxlength="100" placeholder="you@example.com" required>
+      <label for="signupPassword">Password</label>
+      <input id="signupPassword" type="password" autocomplete="new-password" minlength="6" placeholder="At least 6 characters" required>
+      <p id="signupMessage" class="form-message" aria-live="polite"></p>
+      <button type="submit" class="primary-button full-button" id="signupSubmit">Create account →</button>
     </form>
   </div>
 </div>

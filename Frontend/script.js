@@ -50,6 +50,15 @@ try {
   adminToken = sessionStorage.getItem("gtmsAdminToken") || "";
 } catch {}
 
+// Logged-in player (null = guest). Token survives a refresh.
+let currentUser = null;
+let userToken = "";
+let pendingTournamentId = null;
+
+try {
+  userToken = localStorage.getItem("gtmsUserToken") || "";
+} catch {}
+
 function saveRegistrations() {
   try {
     localStorage.setItem("gtmsRegistrations", JSON.stringify(registrations));
@@ -160,6 +169,10 @@ async function apiRequest(path, options = {}) {
     ...(options.headers || {})
   };
 
+  if (userToken) {
+    headers["X-User-Token"] = userToken;
+  }
+
   if (adminToken) {
     headers.Authorization = `Bearer ${adminToken}`;
   }
@@ -226,10 +239,16 @@ async function loadTournaments() {
   updateCountdowns();
 }
 async function loadRegistrations() {
+    if (!currentUser) {
+      registrations = [];
+      renderRegistrations();
+      return;
+    }
   try {
-    registrations = await apiRequest("/registrations");
+      registrations = await apiRequest("/my-registrations");
   } catch (error) {
     console.error("Load registrations failed:", error);
+    if (error.status === 401) clearUserSession();
   }
 
   renderRegistrations();
@@ -374,9 +393,7 @@ function renderTournaments() {
     const canRegister =
       t.status === "Open" && available > 0;
 
-    const isRegistered = registrations.some(
-      r => r.tournamentId === t.id
-    );
+    const isRegistered = false; // unlimited entries allowed
 
     let buttonText = "Register →";
 
@@ -494,7 +511,10 @@ function openTournament(id) {
       <small>STATUS</small>
       <strong>${escapeHTML(t.status)}</strong>
     </div>
-
+    <div class="modal-info">
+      <small>TYPE</small>
+      <strong>${escapeHTML((t.competitorType || "").toUpperCase())}</strong>
+    </div>
     <div class="modal-info">
       <small>AVAILABLE SLOTS</small>
       <strong>${available} / ${t.slots}</strong>
@@ -503,6 +523,13 @@ function openTournament(id) {
   const teamInput = document.getElementById("teamName");
   teamInput.disabled = false;
   teamInput.required = false;
+
+  // Suggest the account name; any name can still be typed.
+  const nameInput = document.getElementById("playerName");
+  if (currentUser && !nameInput.value) nameInput.value = currentUser.username;
+  
+    document.getElementById("entryType").value =
+    ["solo", "duo", "squad"].includes(t.competitorType) ? t.competitorType : "solo";
   const message = document.getElementById("registrationMessage");
 
   message.textContent = "";
@@ -517,6 +544,7 @@ function openTournament(id) {
     : (canRegister
       ? "Confirm registration →"
       : "Registration unavailable");
+      if (canRegister && !currentUser) submit.textContent = "Log in to register →";
 
   openModal("tournamentModal");
 }
@@ -529,10 +557,19 @@ document.getElementById("registrationForm").addEventListener("submit", async eve
   const tournament = tournaments.find(t => t.id === id);
   const playerName = document.getElementById("playerName").value.trim();
   const teamName = document.getElementById("teamName").value.trim();
+  const entryType = document.getElementById("entryType").value;
   const message = document.getElementById("registrationMessage");
   const submit = document.getElementById("registerSubmit");
 
   if (!tournament || !playerName) return;
+
+  // Registrations are saved under an account, so guests log in first.
+  if (!currentUser) {
+    pendingTournamentId = id;
+    closeModal("tournamentModal");
+    openAuth("login", "Log in to register for " + tournament.name + ".");
+    return;
+  }
 
   message.textContent = "";
   message.classList.remove("error");
@@ -542,7 +579,8 @@ document.getElementById("registrationForm").addEventListener("submit", async eve
   try {
     await apiRequest(`/tournaments/${id}/register`, {
       method: "POST",
-      body: JSON.stringify({ playerName, teamName })
+      body: JSON.stringify({ playerName, teamName, entryType })
+
     });
 
     closeModal("tournamentModal");
@@ -551,6 +589,13 @@ document.getElementById("registrationForm").addEventListener("submit", async eve
 
     await Promise.all([loadTournaments(), loadRegistrations()]);
   } catch (error) {
+    if (error.status === 401) {
+      clearUserSession();
+      pendingTournamentId = id;
+      closeModal("tournamentModal");
+      openAuth("login", "Your session expired. Please log in again.");
+      return;
+    }
     message.textContent = error.message;
     message.classList.add("error");
   } finally {
@@ -664,6 +709,16 @@ function renderLeaderboard() {
 function renderRegistrations() {
   const container = document.getElementById("registrationsList");
 
+  if (!currentUser) {
+    container.innerHTML = `
+      <div class="no-registrations">
+        Log in to see your registrations.
+        <button type="button" class="text-button" data-open-auth="login">Log in →</button>
+      </div>
+    `;
+    return;
+  }
+
   if (registrations.length === 0) {
     container.innerHTML = `
       <div class="no-registrations">
@@ -678,7 +733,7 @@ function renderRegistrations() {
     <div class="registration-row">
       <div>
         <strong>${escapeHTML(r.tournamentName)}</strong>
-        <small>${escapeHTML(r.playerName)} · ${escapeHTML(r.teamName)}</small>
+        <small>${escapeHTML(r.playerName)} · ${escapeHTML(r.teamName)}${r.entryType ? " · " + escapeHTML(r.entryType.charAt(0).toUpperCase() + r.entryType.slice(1)) : ""}</small>
       </div>
       <span class="registration-tag">Registered ✓</span>
     </div>
@@ -804,6 +859,7 @@ document.getElementById("adminForm").addEventListener("submit", async event => {
   const slots = Number(document.getElementById("newSlots").value);
   const date = document.getElementById("newDate").value;
   const status = document.getElementById("newStatus").value;
+  const competitorType = document.getElementById("newCompetitorType").value;
   const message = document.getElementById("adminMessage");
 
   if (!name || !date || !Number.isFinite(prize) || prize < 0 ||
@@ -816,7 +872,15 @@ document.getElementById("adminForm").addEventListener("submit", async event => {
   try {
     await apiRequest("/tournaments", {
       method: "POST",
-      body: JSON.stringify({ name, game, prize, slots, date, status })
+      body: JSON.stringify({
+        name,
+        game,
+        prize,
+        slots,
+        date,
+        status,
+        competitorType
+      })
     });
 
     closeModal("adminModal");
@@ -841,6 +905,244 @@ document.getElementById("adminForm").addEventListener("submit", async event => {
   }
 });
 
+// =========================================
+// PLAYER ACCOUNTS: menu, login, sign-up, profile, logout
+// =========================================
+
+function setUserSession(token, user) {
+  userToken = token;
+  currentUser = user;
+  try { localStorage.setItem("gtmsUserToken", token); } catch {}
+  updateUserUI();
+}
+
+function clearUserSession() {
+  userToken = "";
+  currentUser = null;
+  registrations = [];
+  try { localStorage.removeItem("gtmsUserToken"); } catch {}
+  updateUserUI();
+  renderRegistrations();
+}
+
+function updateUserUI() {
+  const name = currentUser ? currentUser.username : "Guest";
+  document.getElementById("profileAvatar").textContent = name.charAt(0).toUpperCase();
+  document.getElementById("profileName").textContent = name;
+  document.getElementById("profileSubtitle").textContent = currentUser ? "Esports member" : "Not signed in";
+  document.getElementById("welcomeName").textContent = currentUser ? `${currentUser.username}.` : "Player.";
+  document.getElementById("dropdownCaption").textContent =
+    currentUser ? `Signed in as ${currentUser.username}` : "Not signed in";
+  document.getElementById("dropdownUserItems").classList.toggle("hidden", !currentUser);
+  document.getElementById("dropdownGuestItems").classList.toggle("hidden", !!currentUser);
+}
+
+async function loadCurrentUser() {
+  if (!userToken) { updateUserUI(); return; }
+  try {
+    const data = await apiRequest("/auth/me");
+    currentUser = data.user;
+  } catch (error) {
+    if (error.status === 401) clearUserSession();
+    else console.error("Session check failed:", error);
+  }
+  updateUserUI();
+}
+
+// One registration row (profile modal).
+function registrationRowHTML(r) {
+  const typeLabel = r.entryType ? r.entryType.charAt(0).toUpperCase() + r.entryType.slice(1) : "";
+  const details = [typeLabel, r.game, r.tournamentDate ? formatDate(String(r.tournamentDate).slice(0, 10)) : ""]
+    .filter(Boolean).join(" · ");
+  return `
+    <div class="registration-row">
+      <div>
+        <strong>${escapeHTML(r.tournamentName)}</strong>
+        <small>${escapeHTML(r.playerName)} · ${escapeHTML(r.teamName)}${details ? " · " + escapeHTML(details) : ""}</small>
+      </div>
+      <span class="registration-tag">Registered ✓</span>
+    </div>
+  `;
+}
+
+// ••• menu
+const profileMenuButton = document.getElementById("profileMenuButton");
+const profileDropdown = document.getElementById("profileDropdown");
+
+function toggleProfileMenu(open) {
+  const shouldOpen = open ?? profileDropdown.classList.contains("hidden");
+  profileDropdown.classList.toggle("hidden", !shouldOpen);
+  profileMenuButton.setAttribute("aria-expanded", String(shouldOpen));
+}
+
+profileMenuButton.addEventListener("click", event => {
+  event.stopPropagation();
+  toggleProfileMenu();
+});
+
+document.addEventListener("click", event => {
+  if (!profileDropdown.contains(event.target) && event.target !== profileMenuButton) {
+    toggleProfileMenu(false);
+  }
+  const link = event.target.closest("[data-open-auth]");
+  if (link) openAuth(link.dataset.openAuth);
+});
+
+document.getElementById("menuProfile").addEventListener("click", () => { toggleProfileMenu(false); openProfile(); });
+document.getElementById("menuLogout").addEventListener("click", () => { toggleProfileMenu(false); logout(); });
+document.getElementById("menuLogin").addEventListener("click", () => { toggleProfileMenu(false); openAuth("login"); });
+document.getElementById("menuSignup").addEventListener("click", () => { toggleProfileMenu(false); openAuth("signup"); });
+
+// Login / create-account modal
+function switchAuthTab(tab) {
+  const isLogin = tab === "login";
+  document.querySelectorAll("[data-auth-tab]").forEach(button => {
+    button.classList.toggle("active", button.dataset.authTab === tab);
+  });
+  document.getElementById("loginForm").classList.toggle("hidden", !isLogin);
+  document.getElementById("signupForm").classList.toggle("hidden", isLogin);
+  document.getElementById("authTitle").textContent = isLogin ? "Welcome back" : "Create your account";
+  ["loginMessage", "signupMessage"].forEach(id => {
+    const m = document.getElementById(id);
+    m.textContent = "";
+    m.classList.remove("error");
+  });
+  const first = document.getElementById(isLogin ? "loginUsername" : "signupUsername");
+  setTimeout(() => first.focus(), 50);
+}
+
+function openAuth(tab = "login", subtitle) {
+  document.getElementById("authSubtitle").textContent =
+    subtitle || "Log in to register and track your tournaments.";
+  openModal("authModal");
+  switchAuthTab(tab);
+}
+
+document.querySelectorAll("[data-auth-tab]").forEach(button => {
+  button.addEventListener("click", () => switchAuthTab(button.dataset.authTab));
+});
+
+async function afterLogin(data, toastText) {
+  setUserSession(data.token, data.user);
+  closeModal("authModal");
+  document.getElementById("loginForm").reset();
+  document.getElementById("signupForm").reset();
+  document.getElementById("registrationForm").reset();
+  showToast(toastText);
+  await loadRegistrations();
+  renderTournaments();
+
+  if (pendingTournamentId) {          // continue the registration that needed a login
+    const id = pendingTournamentId;
+    pendingTournamentId = null;
+    openTournament(id);
+  }
+}
+
+async function submitAuthForm(event, path, body, messageId, submitId, busyText, toastText) {
+  event.preventDefault();
+  const message = document.getElementById(messageId);
+  const submit = document.getElementById(submitId);
+  const idleText = submit.textContent;
+
+  message.textContent = "";
+  message.classList.remove("error");
+  submit.disabled = true;
+  submit.textContent = busyText;
+
+  try {
+    const data = await apiRequest(path, { method: "POST", body: JSON.stringify(body) });
+    await afterLogin(data, toastText(data.user));
+  } catch (error) {
+    message.textContent = error.message;
+    message.classList.add("error");
+  } finally {
+    submit.disabled = false;
+    submit.textContent = idleText;
+  }
+}
+
+document.getElementById("loginForm").addEventListener("submit", event => {
+  submitAuthForm(event, "/auth/login", {
+    username: document.getElementById("loginUsername").value.trim(),
+    password: document.getElementById("loginPassword").value
+  }, "loginMessage", "loginSubmit", "Logging in…", user => `Welcome back, ${user.username}!`);
+});
+
+document.getElementById("signupForm").addEventListener("submit", event => {
+  submitAuthForm(event, "/auth/signup", {
+    username: document.getElementById("signupUsername").value.trim(),
+    email: document.getElementById("signupEmail").value.trim(),
+    password: document.getElementById("signupPassword").value
+  }, "signupMessage", "signupSubmit", "Creating account…", user => `Account created. Welcome, ${user.username}!`);
+});
+
+// Logout → then show the login popup for another player
+async function logout() {
+  const name = currentUser ? currentUser.username : "";
+  try { await apiRequest("/auth/logout", { method: "POST" }); } catch {}
+  clearUserSession();
+  closeModal("profileModal");
+  renderTournaments();
+  document.getElementById("registrationForm").reset();
+  showToast(name ? `${name} logged out.` : "Logged out.");
+  openAuth("login", "Log in with another account, or create a new one.");
+}
+
+document.getElementById("profileLogout").addEventListener("click", logout);
+
+// Profile modal
+async function openProfile() {
+  if (!currentUser) { openAuth("login"); return; }
+
+  const name = currentUser.username;
+  document.getElementById("profileModalAvatar").textContent = name.charAt(0).toUpperCase();
+  document.getElementById("profileTitle").textContent = name;
+  document.getElementById("profileMeta").textContent = currentUser.email;
+  document.getElementById("profileStats").innerHTML = "";
+  document.getElementById("profileDetails").innerHTML = "";
+  document.getElementById("profileRegistrations").innerHTML = `<div class="no-registrations">Loading…</div>`;
+  openModal("profileModal");
+
+  try {
+    const [profile] = await Promise.all([apiRequest("/me/profile"), loadRegistrations()]);
+    renderProfile(profile);
+  } catch (error) {
+    if (error.status === 401) {
+      clearUserSession();
+      closeModal("profileModal");
+      openAuth("login", "Your session expired. Please log in again.");
+      return;
+    }
+    document.getElementById("profileRegistrations").innerHTML =
+      `<div class="no-registrations">${escapeHTML(error.message)}</div>`;
+  }
+}
+
+function renderProfile(profile) {
+  const { user, player, stats } = profile;
+  const memberSince = user.memberSince ? formatDate(String(user.memberSince).slice(0, 10)) : "—";
+  document.getElementById("profileMeta").textContent = `${user.email} · Member since ${memberSince}`;
+
+  const info = (label, value) => `
+    <div class="modal-info"><small>${label}</small><strong>${escapeHTML(value)}</strong></div>`;
+
+  document.getElementById("profileStats").innerHTML =
+    info("REGISTRATIONS", stats.totalEntries) +
+    info("TOURNAMENTS JOINED", stats.tournamentsJoined) +
+    info("UPCOMING", stats.upcomingEntries) +
+    info("ROLE", user.role === "admin" ? "Admin" : "Player");
+
+  document.getElementById("profileDetails").innerHTML = player
+    ? info("GAMER TAG", player.gamer_tag) + info("FULL NAME", player.full_name) +
+      (player.country ? info("COUNTRY", player.country) : "")
+    : "";
+
+  document.getElementById("profileRegCount").textContent = registrations.length;
+  document.getElementById("profileRegistrations").innerHTML = registrations.length
+    ? registrations.map(registrationRowHTML).join("")
+    : `<div class="no-registrations">No registrations yet. Pick a tournament to get started.</div>`;
+}
 
 // Modal close buttons.
 document.querySelectorAll("[data-close]").forEach(button => {
@@ -861,6 +1163,7 @@ document.querySelectorAll(".modal-backdrop").forEach(backdrop => {
 // Close open modals using Escape.
 document.addEventListener("keydown", event => {
   if (event.key === "Escape") {
+    toggleProfileMenu(false);
     document.querySelectorAll(".modal-backdrop").forEach(modal => {
       if (!modal.classList.contains("hidden")) {
         closeModal(modal.id);
@@ -913,7 +1216,7 @@ document.getElementById("copyrightYear").textContent =
 
 renderAll();
 loadTournaments();
-loadRegistrations();    // then fill it from MySQL
+loadCurrentUser().then(loadRegistrations);   // who is logged in → their registrations
 
 // Update countdowns every second without rebuilding cards.
 setInterval(updateCountdowns, 1000);

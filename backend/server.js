@@ -95,6 +95,84 @@ function mapStatusToDatabase(status) {
 
   return null;
 }
+// ===== PLAYER ACCOUNTS + SESSIONS =====
+const USER_SESSION_DAYS = 7;
+
+// scrypt is built into Node, so no new package is needed.
+function hashPassword(password) {
+  return new Promise((resolve, reject) => {
+    const salt = crypto.randomBytes(16).toString("hex");
+    crypto.scrypt(password, salt, 64, (error, derived) => {
+      if (error) return reject(error);
+      resolve(`scrypt$${salt}$${derived.toString("hex")}`);
+    });
+  });
+}
+
+function verifyPassword(password, stored) {
+  return new Promise(resolve => {
+    const parts = String(stored || "").split("$");
+    if (parts.length !== 3 || parts[0] !== "scrypt") return resolve(false);
+    const [, salt, hashHex] = parts;
+    const expected = Buffer.from(hashHex, "hex");
+    crypto.scrypt(password, salt, expected.length, (error, derived) => {
+      if (error || derived.length !== expected.length) return resolve(false);
+      resolve(crypto.timingSafeEqual(derived, expected));
+    });
+  });
+}
+
+function hashToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+async function createUserSession(userId) {
+  const token = crypto.randomBytes(32).toString("hex");
+  await pool.execute("DELETE FROM user_sessions WHERE expires_at <= NOW()");
+  await pool.execute(
+    `INSERT INTO user_sessions (token_hash, user_id, expires_at)
+     VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ${USER_SESSION_DAYS} DAY))`,
+    [hashToken(token), userId]
+  );
+  return token;
+}
+
+function publicUser(row) {
+  return {
+    id: row.user_id,
+    username: row.username,
+    email: row.email,
+    role: row.role,
+    memberSince: row.created_at
+  };
+}
+
+// Player token comes in the X-User-Token header (Authorization = admin).
+async function requireUser(req, res, next) {
+  const token = String(req.headers["x-user-token"] || "");
+  if (!token) {
+    return res.status(401).json({ error: "Please log in to continue." });
+  }
+  try {
+    const [rows] = await pool.execute(
+      `SELECT u.user_id, u.username, u.email, u.role, u.created_at
+       FROM user_sessions s
+       JOIN users u ON u.user_id = s.user_id
+       WHERE s.token_hash = ? AND s.expires_at > NOW()
+       LIMIT 1`,
+      [hashToken(token)]
+    );
+    if (rows.length === 0) {
+      return res.status(401).json({ error: "Your session has expired. Please log in again." });
+    }
+    req.user = rows[0];
+    req.userTokenHash = hashToken(token);
+    next();
+  } catch (error) {
+    console.error("Session check error:", error.code, error.message);
+    res.status(500).json({ error: "Could not verify your session." });
+  }
+}
 
 // Health check
 app.get("/api/health", (req, res) => {
@@ -172,6 +250,122 @@ app.post("/api/admin/login", async (req, res) => {
     res.status(500).json({ error: "Admin login failed." });
   }
 });
+// Create account → INSERT INTO users
+app.post("/api/auth/signup", async (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  const password = String(req.body?.password || "");
+
+  if (username.length < 3 || username.length > 30) {
+    return res.status(400).json({ error: "Username must be 3–30 characters." });
+  }
+  if (!/^[A-Za-z0-9 _.-]+$/.test(username)) {
+    return res.status(400).json({ error: "Username can use letters, numbers, spaces, _ . and - only." });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 100) {
+    return res.status(400).json({ error: "Enter a valid email address." });
+  }
+  if (password.length < 6 || password.length > 100) {
+    return res.status(400).json({ error: "Password must be at least 6 characters." });
+  }
+
+  try {
+    const passwordHash = await hashPassword(password);
+    const [result] = await pool.execute(
+      `INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, 'player')`,
+      [username, email, passwordHash]
+    );
+    const [rows] = await pool.execute(
+      "SELECT user_id, username, email, role, created_at FROM users WHERE user_id = ?",
+      [result.insertId]
+    );
+    const token = await createUserSession(result.insertId);
+    res.status(201).json({ token, user: publicUser(rows[0]) });
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      const field = /email/i.test(error.message) ? "email" : "username";
+      return res.status(409).json({ error: `That ${field} is already taken.` });
+    }
+    console.error("Signup error:", error.code, error.message);
+    res.status(500).json({ error: "Could not create the account." });
+  }
+});
+
+// Login with username or email
+app.post("/api/auth/login", async (req, res) => {
+  const login = String(req.body?.username || "").trim();
+  const password = String(req.body?.password || "");
+
+  if (!login || !password) {
+    return res.status(400).json({ error: "Enter your username and password." });
+  }
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT user_id, username, email, role, created_at, password_hash
+       FROM users WHERE username = ? OR email = ? LIMIT 1`,
+      [login, login.toLowerCase()]
+    );
+    const valid = rows.length > 0 && await verifyPassword(password, rows[0].password_hash);
+    if (!valid) {
+      return res.status(401).json({ error: "Incorrect username or password." });
+    }
+    const token = await createUserSession(rows[0].user_id);
+    res.json({ token, user: publicUser(rows[0]) });
+  } catch (error) {
+    console.error("Login error:", error.code, error.message);
+    res.status(500).json({ error: "Login failed." });
+  }
+});
+
+// Logout → delete the session row
+app.post("/api/auth/logout", requireUser, async (req, res) => {
+  try {
+    await pool.execute("DELETE FROM user_sessions WHERE token_hash = ?", [req.userTokenHash]);
+  } catch (error) {
+    console.error("Logout error:", error.code, error.message);
+  }
+  res.json({ message: "Logged out." });
+});
+
+// Who is logged in?
+app.get("/api/auth/me", requireUser, (req, res) => {
+  res.json({ user: publicUser(req.user) });
+});
+
+// Profile details + stats
+app.get("/api/me/profile", requireUser, async (req, res) => {
+  try {
+    const userId = req.user.user_id;
+    const [players] = await pool.execute(
+      "SELECT gamer_tag, full_name, country FROM players WHERE user_id = ? LIMIT 1",
+      [userId]
+    );
+    const [statsRows] = await pool.execute(
+      `SELECT
+         COUNT(*) AS totalEntries,
+         COUNT(DISTINCT e.tournament_id) AS tournamentsJoined,
+         COALESCE(SUM(t.start_date >= CURDATE()), 0) AS upcomingEntries
+       FROM tournament_entries e
+       JOIN tournaments t ON t.tournament_id = e.tournament_id
+       WHERE e.user_id = ?`,
+      [userId]
+    );
+    const s = statsRows[0];
+    res.json({
+      user: publicUser(req.user),
+      player: players[0] || null,
+      stats: {
+        totalEntries: Number(s.totalEntries) || 0,
+        tournamentsJoined: Number(s.tournamentsJoined) || 0,
+        upcomingEntries: Number(s.upcomingEntries) || 0
+      }
+    });
+  } catch (error) {
+    console.error("Profile error:", error.code, error.message);
+    res.status(500).json({ error: "Could not load your profile." });
+  }
+});
 
 // List tournaments and their real registration counts
 app.get("/api/tournaments", async (req, res) => {
@@ -218,8 +412,11 @@ app.post("/api/tournaments", requireAdmin, async (req, res) => {
       prize,
       slots,
       date,
-      status
+      status,
+      competitorType
     } = req.body || {};
+
+    const tournamentType = String(competitorType || "").trim().toLowerCase();
 
     const tournamentName = String(name || "").trim();
     const gameName = String(game || "").trim();
@@ -238,10 +435,15 @@ app.post("/api/tournaments", requireAdmin, async (req, res) => {
       return res.status(400).json({ error: "Please select a game." });
     }
 
+    if (!["solo", "duo", "squad"].includes(tournamentType)) {
+      return res.status(400).json({ error: "Choose Solo, Duo or Squad." });
+    }
+
     if (!Number.isFinite(prizePool) || prizePool < 0) {
       return res.status(400).json({
         error: "Prize pool must be zero or greater."
       });
+      
     }
 
     if (
@@ -305,11 +507,12 @@ app.post("/api/tournaments", requireAdmin, async (req, res) => {
       `INSERT INTO tournaments
         (game_id, created_by, name, format, competitor_type,
          max_participants, prize_pool, start_date, end_date, status)
-       VALUES (?, ?, ?, 'single_elimination', 'team', ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, 'single_elimination', ?, ?, ?, ?, ?, ?)`,
       [
         games[0].game_id,
         req.adminUserId,
         tournamentName,
+        tournamentType,
         maxParticipants,
         prizePool,
         startDate,
@@ -502,10 +705,11 @@ app.post("/api/tournaments", requireAdmin, async (req, res) => {
 //   }
 // });
 // Register anyone for any open tournament. Free-text names, unlimited entries.
-app.post("/api/tournaments/:id/register", async (req, res) => {
+app.post("/api/tournaments/:id/register", requireUser, async (req, res) => {
   const tournamentId = Number(req.params.id);
   const playerName = String(req.body?.playerName || "").trim();
   const teamName = String(req.body?.teamName || "").trim();
+  const entryType = String(req.body?.entryType || "solo").trim().toLowerCase();
 
   if (!Number.isInteger(tournamentId) || tournamentId < 1) {
     return res.status(400).json({ error: "Invalid tournament ID." });
@@ -517,6 +721,10 @@ app.post("/api/tournaments/:id/register", async (req, res) => {
 
   if (teamName.length > 50) {
     return res.status(400).json({ error: "Team name must be 50 characters or fewer." });
+  }
+
+  if (!["solo", "duo", "squad"].includes(entryType)) {
+    return res.status(400).json({ error: "Choose Solo, Duo or Squad." });
   }
 
   let connection;
@@ -561,9 +769,9 @@ app.post("/api/tournaments/:id/register", async (req, res) => {
     }
 
     const [result] = await connection.execute(
-      `INSERT INTO tournament_entries (tournament_id, player_name, team_name)
-       VALUES (?, ?, ?)`,
-      [tournamentId, playerName, teamName || null]
+      `INSERT INTO tournament_entries (tournament_id, user_id, player_name, team_name, entry_type)
+       VALUES (?, ?, ?, ?, ?)`,
+      [tournamentId, req.user.user_id, playerName, teamName || null, entryType]
     );
 
     await connection.commit();
@@ -608,6 +816,34 @@ app.get("/api/registrations", async (req, res) => {
     res.json(rows);
   } catch (error) {
     console.error("Registrations list error:", error.code, error.message);
+    res.status(500).json({ error: "Could not load registrations." });
+  }
+});
+// List ONLY the logged-in player's registrations.
+app.get("/api/my-registrations", requireUser, async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT
+        e.entry_id AS id,
+        e.tournament_id AS tournamentId,
+        t.name AS tournamentName,
+        g.game_name AS game,
+        t.start_date AS tournamentDate,
+        e.player_name AS playerName,
+        COALESCE(e.team_name, 'Solo player') AS teamName,
+        e.entry_type AS entryType,
+        e.registered_at AS registeredAt
+      FROM tournament_entries e
+      JOIN tournaments t ON t.tournament_id = e.tournament_id
+      JOIN games g ON g.game_id = t.game_id
+      WHERE e.user_id = ?
+      ORDER BY e.registered_at DESC, e.entry_id DESC
+      LIMIT 200`,
+      [req.user.user_id]
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error("My registrations error:", error.code, error.message);
     res.status(500).json({ error: "Could not load registrations." });
   }
 });

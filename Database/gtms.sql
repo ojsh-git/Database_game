@@ -37,7 +37,7 @@ CREATE TABLE `games` (
   `platform` varchar(50) DEFAULT NULL,
   PRIMARY KEY (`game_id`),
   UNIQUE KEY `game_name` (`game_name`)
-) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=17 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -46,7 +46,7 @@ CREATE TABLE `games` (
 
 LOCK TABLES `games` WRITE;
 /*!40000 ALTER TABLE `games` DISABLE KEYS */;
-INSERT INTO `games` VALUES (1,'Valorant','FPS','PC'),(2,'BGMI','Battle Royale','Mobile'),(3,'EA SPORTS FC','Sports','PC/Console'),(4,'Chess','Strategy','Online'),(5,'Free Fire','Battle Royale','Mobile'),(6,'Counter-Strike 2','FPS','PC');
+INSERT INTO `games` VALUES (1,'Valorant','FPS','PC'),(2,'BGMI','Battle Royale','Mobile'),(3,'EA SPORTS FC','Sports','PC/Console'),(4,'Chess','Strategy','Online'),(5,'Free Fire','Battle Royale','Mobile'),(6,'Counter-Strike 2','FPS','PC'),(7,'Call of Duty: Mobile','FPS','Mobile'),(8,'PUBG: Battlegrounds','Battle Royale','PC/Console'),(9,'Fortnite','Battle Royale','PC/Console'),(10,'Rocket League','Sports','PC/Console');
 /*!40000 ALTER TABLE `games` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -356,13 +356,17 @@ DROP TABLE IF EXISTS `tournament_entries`;
 CREATE TABLE `tournament_entries` (
   `entry_id` int NOT NULL AUTO_INCREMENT,
   `tournament_id` int NOT NULL,
+  `user_id` int DEFAULT NULL,
   `player_name` varchar(50) NOT NULL,
   `team_name` varchar(50) DEFAULT NULL,
+  `entry_type` enum('solo','duo','squad') NOT NULL DEFAULT 'solo',
   `registered_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`entry_id`),
   KEY `fk_entry_tournament` (`tournament_id`),
-  CONSTRAINT `fk_entry_tournament` FOREIGN KEY (`tournament_id`) REFERENCES `tournaments` (`tournament_id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+  KEY `idx_entries_user` (`user_id`),
+  CONSTRAINT `fk_entry_tournament` FOREIGN KEY (`tournament_id`) REFERENCES `tournaments` (`tournament_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_entry_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+) ENGINE=InnoDB AUTO_INCREMENT=8 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -371,7 +375,7 @@ CREATE TABLE `tournament_entries` (
 
 LOCK TABLES `tournament_entries` WRITE;
 /*!40000 ALTER TABLE `tournament_entries` DISABLE KEYS */;
-INSERT INTO `tournament_entries` VALUES (1,2,'ojas',NULL,'2026-10-19 19:35:03'),(2,3,'ShadowX',NULL,'2026-10-19 19:35:10');
+INSERT INTO `tournament_entries` VALUES (1,2,NULL,'ojas',NULL,'solo','2026-10-19 19:35:03'),(2,3,NULL,'ShadowX',NULL,'solo','2026-10-19 19:35:10'),(3,2,NULL,'ShadowX','vipers','solo','2026-10-19 23:22:26'),(4,5,10,'Starojas','Strikers','solo','2026-10-20 02:08:28'),(5,2,11,'Toshi',NULL,'solo','2026-10-20 02:09:28'),(6,3,12,'Staroj',NULL,'solo','2026-10-20 02:15:54'),(7,5,11,'Viper','Strikers','duo','2026-10-20 02:32:59');
 /*!40000 ALTER TABLE `tournament_entries` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -388,7 +392,7 @@ CREATE TABLE `tournaments` (
   `created_by` int NOT NULL,
   `name` varchar(150) NOT NULL,
   `format` enum('single_elimination','double_elimination','round_robin') NOT NULL DEFAULT 'single_elimination',
-  `competitor_type` enum('solo','team') NOT NULL,
+  `competitor_type` enum('solo','duo','squad','team') NOT NULL,
   `max_participants` int NOT NULL,
   `prize_pool` decimal(10,2) NOT NULL DEFAULT '0.00',
   `start_date` date NOT NULL,
@@ -404,7 +408,7 @@ CREATE TABLE `tournaments` (
   CONSTRAINT `chk_tournament_capacity` CHECK ((`max_participants` >= 2)),
   CONSTRAINT `chk_tournament_dates` CHECK ((`end_date` >= `start_date`)),
   CONSTRAINT `chk_tournament_prize` CHECK ((`prize_pool` >= 0))
-) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -413,8 +417,36 @@ CREATE TABLE `tournaments` (
 
 LOCK TABLES `tournaments` WRITE;
 /*!40000 ALTER TABLE `tournaments` DISABLE KEYS */;
-INSERT INTO `tournaments` VALUES (1,1,1,'Valorant Champions Cup','single_elimination','team',8,50000.00,'2026-10-10','2026-10-20','ongoing','2026-10-18 11:23:16'),(2,4,1,'Chess Open Challenge','single_elimination','solo',16,10000.00,'2026-12-05','2026-12-07','registration_open','2026-10-18 11:23:16'),(3,6,1,'Strike-Rush','single_elimination','team',32,50000.00,'2026-12-30','2026-12-30','registration_open','2026-10-19 13:08:20');
+INSERT INTO `tournaments` VALUES (1,1,1,'Valorant Champions Cup','single_elimination','team',8,50000.00,'2026-10-10','2026-10-20','ongoing','2026-10-18 11:23:16'),(2,4,1,'Chess Open Challenge','single_elimination','solo',16,10000.00,'2026-12-05','2026-12-07','registration_open','2026-10-18 11:23:16'),(3,6,1,'Strike-Rush','single_elimination','team',32,50000.00,'2026-12-30','2026-12-30','registration_open','2026-10-19 13:08:20'),(4,2,1,'100 v 1','single_elimination','team',101,2000.00,'2026-12-20','2026-12-20','upcoming','2026-10-19 17:53:38'),(5,3,1,'Champions LEague','single_elimination','duo',64,50000.00,'2026-11-30','2026-11-30','registration_open','2026-10-19 20:38:11');
 /*!40000 ALTER TABLE `tournaments` ENABLE KEYS */;
+UNLOCK TABLES;
+
+--
+-- Table structure for table `user_sessions`
+--
+
+DROP TABLE IF EXISTS `user_sessions`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!50503 SET character_set_client = utf8mb4 */;
+CREATE TABLE `user_sessions` (
+  `token_hash` char(64) NOT NULL,
+  `user_id` int NOT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `expires_at` datetime NOT NULL,
+  PRIMARY KEY (`token_hash`),
+  KEY `idx_sessions_user` (`user_id`),
+  CONSTRAINT `fk_session_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+
+--
+-- Dumping data for table `user_sessions`
+--
+
+LOCK TABLES `user_sessions` WRITE;
+/*!40000 ALTER TABLE `user_sessions` DISABLE KEYS */;
+INSERT INTO `user_sessions` VALUES ('e98f419315354d08e3354453f56dded2198db4ca7cb86989f03b8e7d75187e59',11,'2026-10-20 02:16:39','2026-10-27 02:16:39');
+/*!40000 ALTER TABLE `user_sessions` ENABLE KEYS */;
 UNLOCK TABLES;
 
 --
@@ -434,7 +466,7 @@ CREATE TABLE `users` (
   PRIMARY KEY (`user_id`),
   UNIQUE KEY `username` (`username`),
   UNIQUE KEY `email` (`email`)
-) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=13 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -443,7 +475,7 @@ CREATE TABLE `users` (
 
 LOCK TABLES `users` WRITE;
 /*!40000 ALTER TABLE `users` DISABLE KEYS */;
-INSERT INTO `users` VALUES (1,'admin_master','admin@gametourney.com','hash_placeholder','admin','2026-10-18 11:23:16'),(2,'shadow_x','aarav@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(3,'blaze_queen','riya@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(4,'nova_k','karan@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(5,'viper_s','sneha@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(6,'rogue_rd','rohan@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(7,'titan_an','ananya@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(8,'echo_vs','vikram@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(9,'pixel_mr','meera@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16');
+INSERT INTO `users` VALUES (1,'admin_master','admin@gametourney.com','hash_placeholder','admin','2026-10-18 11:23:16'),(2,'shadow_x','aarav@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(3,'blaze_queen','riya@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(4,'nova_k','karan@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(5,'viper_s','sneha@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(6,'rogue_rd','rohan@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(7,'titan_an','ananya@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(8,'echo_vs','vikram@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(9,'pixel_mr','meera@gametourney.com','hash_placeholder','player','2026-10-18 11:23:16'),(10,'Starojas','oj@test1.com','scrypt$b1e3741a5cd1804183063571916bca3c$515bfd40daab87cfa2e148fd6f8a9914ce62a6707991b0c2ae1f4bc091a7b9e2669f0624ac3a6dc6bdf5696662906c9b92da4c6d644821d7cbafb8f31fc0492d','player','2026-10-19 20:36:23'),(11,'Toshi','tosh@test2.com','scrypt$54af564b46cadb9babe5dd09667f3087$9ced9d9b7a15a72c9ec77828310083e9b155582e9777336d742ffe96594295983121682e8e3c21e7810c118787d51b0dac012cebbe575e58fbd2058f70d634f8','player','2026-10-19 20:39:15'),(12,'Staroj','oj@toshi.com','scrypt$8ef625c16fcfabde93ffd7b72390faae$5dc3cb1a2c64b028fd4d45b68f9e4e6644920c4d66d5b061fc214c27fde4bb30bf092c871f11fba31a65432a2daddc2651e8dfe387682fdd83333b0484712089','player','2026-10-19 20:45:43');
 /*!40000 ALTER TABLE `users` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -611,4 +643,4 @@ USE `gaming_tournament_db`;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2026-10-19 19:48:41
+-- Dump completed on 2026-10-20  2:34:15
